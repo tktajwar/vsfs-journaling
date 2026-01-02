@@ -235,29 +235,31 @@ static uint32_t append_to_journal(const void *data, uint32_t size) {
         jh = read_journal_header();
     }
 
-    if (get_journal_free_space(&jh) < size) {
-        return 0;
+    if (size > sizeof(struct data_record) && size != sizeof(struct commit_record)) {
+	    fprintf(stderr, "ERROR: record size %u exceeds expected maximum\n", size);
+	    exit(EXIT_FAILURE);
     }
 
-    uint32_t journal_offset = jh.nbytes_used;
-    uint32_t block_offset = journal_offset % BLOCK_SIZE;
-    uint32_t current_block = sb.journal_block + (journal_offset / BLOCK_SIZE);
+    if (get_journal_free_space(&jh) < size) return 0;
 
-    if (block_offset + size <= BLOCK_SIZE) {
-        read_block(current_block, block_buffer);
-        memcpy(block_buffer + block_offset, data, size);
-        write_block(current_block, block_buffer);
-    } else {
-        uint32_t first_chunk = BLOCK_SIZE - block_offset;
-        uint32_t second_chunk = size - first_chunk;
+    uint32_t written = 0;
+    while (written < size) {
+        uint32_t journal_offset = jh.nbytes_used + written;
+        uint32_t block_idx      = journal_offset / BLOCK_SIZE;
+        uint32_t block_off      = journal_offset % BLOCK_SIZE;
+        uint32_t cur_block      = sb.journal_block + block_idx;
 
-        read_block(current_block, block_buffer);
-        memcpy(block_buffer + block_offset, data, first_chunk);
-        write_block(current_block, block_buffer);
+        uint32_t space_in_block = BLOCK_SIZE - block_off;
+        uint32_t to_write       = size - written;
+        if (to_write > space_in_block) to_write = space_in_block;
 
-        read_block(current_block + 1, block_buffer);
-        memcpy(block_buffer, (uint8_t*)data + first_chunk, second_chunk);
-        write_block(current_block + 1, block_buffer);
+        read_block(cur_block, block_buffer);
+        memcpy(block_buffer + block_off,
+               (const uint8_t *)data + written,
+               to_write);
+        write_block(cur_block, block_buffer);
+
+        written += to_write;
     }
 
     jh.nbytes_used += size;
